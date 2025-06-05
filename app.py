@@ -63,16 +63,21 @@ def logout():
 # ========== Google Drive schedule.xlsx 自動同步 ==========
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 SERVICE_ACCOUNT_FILE = 'service_account.json'
-FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # 改為你的資料夾ID
+FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # <== 改為你的 Google Drive 資料夾ID
 FILE_NAME = "schedule.xlsx"
 
 def sync_schedule():
     try:
+        # Debug: 印出金鑰檔案資訊
+        print('service_account.json exists:', os.path.exists('service_account.json'))
+        print('service_account.json size:', os.path.getsize('service_account.json') if os.path.exists('service_account.json') else 0)
+        print('Current directory files:', os.listdir('.'))
         creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         drive_service = build('drive', 'v3', credentials=creds)
         query = f"'{FOLDER_ID}' in parents and name='{FILE_NAME}' and trashed=false"
         results = drive_service.files().list(q=query, pageSize=1, fields="files(id, name)").execute()
         items = results.get('files', [])
+        print("Google Drive 查詢 schedule.xlsx 結果:", items)
         if not items:
             print("找不到 schedule.xlsx")
             return
@@ -88,13 +93,13 @@ def sync_schedule():
     except Exception as e:
         print("同步 schedule.xlsx 發生錯誤:", e)
 
-# 每小時自動同步
+# 每小時自動同步一次，也在啟動時同步
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_schedule, 'interval', hours=1)
 scheduler.start()
 sync_schedule()
 
-# ========== 課表查詢主程式區塊（以下保持與你原本一致即可） ==========
+# ========== 課表查詢主程式區塊 ==========
 SPECIAL_ROOMS = [
     "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
     "語言教室B", "語言教室C", "門市情境學科教室", "門市服務教室",
