@@ -1,0 +1,12 @@
+Flask
+pandas
+openpyxl
+gunicorn
+gspread
+authlib
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+python-dotenv
+apscheduler
