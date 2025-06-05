@@ -14,7 +14,6 @@ if not os.path.exists("service_account.json") and os.environ.get("GOOGLE_CREDENT
 
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
-from apscheduler.schedulers.background import BackgroundScheduler
 import io
 from googleapiclient.http import MediaIoBaseDownload
 
@@ -70,13 +69,12 @@ def logout():
 
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 SERVICE_ACCOUNT_FILE = 'service_account.json'
-FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # <== 請填你的資料夾 ID
+FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # <== 改成你的雲端資料夾 ID
 
 def sync_schedule(week):
-    # 支援多週檔名 schedule_01.xlsx、schedule_02.xlsx...
+    # 支援多週 schedule_01.xlsx、schedule_02.xlsx...
     file_name = f"schedule_{int(week):02d}.xlsx"
     local_file = file_name
-    # 若本地有檔案且大小合理，則不重抓
     if os.path.exists(local_file) and os.path.getsize(local_file) > 1000:
         return local_file
     creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
@@ -110,7 +108,7 @@ def load_schedule(week):
         print("課表載入失敗:", e)
         return pd.DataFrame()
 
-# ========== 你的調課、查詢主程式區塊 ==========
+# ========== 主班級排序與查詢主程式區塊 ==========
 
 SPECIAL_ROOMS = [
     "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
@@ -124,29 +122,26 @@ FORBIDDEN_SUBJECTS = ["團體活動時間", "多元選修", "彈性學習時間"
 @login_required
 def index():
     user = session.get("user")
-    week = int(request.args.get("week", 1))  # 支援 URL ?week=xx
+    week = int(request.args.get("week", 1))
     df = load_schedule(week)
     if df is None or df.empty:
         return '<h1 style="margin:100px;text-align:center;">系統異常或查無資料，請稍後再試！</h1>'
 
-    # ==== 主班級優先，其餘排最後 ====
+    # 主班級排序：英/會/商/資/多一二三年級，選修/彈性/團體活動排最後
     def class_sort_key(cls_name):
-        # 主班級優先（英/會/商/資/多開頭，依年級、班級排序）
         m = re.match(r'^(英|會|商|資|多)[一二三][甲乙丙丁]$', str(cls_name))
         if m:
             prefix = {'英': 1, '會': 2, '商': 3, '資': 4, '多': 5}[m.group(1)]
             grade = {'一': 1, '二': 2, '三': 3}[cls_name[1]]
             order = {'甲': 1, '乙': 2, '丙': 3, '丁': 4}[cls_name[2]]
             return (0, prefix, grade, order, cls_name)
-        # 其他（有彈性/選修/團體活動關鍵字的排最後）
         if any(s in cls_name for s in ['選修', '彈性', '團體活動']):
             return (2, 0, 0, 0, cls_name)
-        # 其餘排中間
         return (1, 0, 0, 0, cls_name)
 
     class_names = sorted(df['班級名稱'].unique(), key=class_sort_key)
     teacher_names = sorted(df['教師名稱'].dropna().unique())
-    room_names = sorted(df['教室名稱'].dropna().unique())  # 你有需要再加房間排序即可
+    room_names = sorted(df['教室名稱'].dropna().unique())
 
     weekday_dates = {}
     for i, row in df.drop_duplicates(['星期']).iterrows():
@@ -228,10 +223,35 @@ def api_swap_info():
             continue
         ta = df[(df['教師名稱'] == teacher) & (df['星期'] == target_week) & (df['節次'] == target_period)]
         tb = df[(df['教師名稱'] == target_teacher) & (df['星期'] == w) & (df['節次'] == period)]
-        # ... 你原本的調課邏輯 ...
-        # (這裡照你的原本，如果本來沒有return，也沒關係)
-    # --------- 最後加這一行保底 ---------
-    return jsonify({'status': 'error', 'highlight': {}})
+        if (ta.empty and tb.empty):
+            ok = True
+            if room in SPECIAL_ROOMS:
+                occupied = df[
+                    (df['教室名稱'] == room) &
+                    (df['星期'] == target_week) &
+                    (df['節次'] == target_period) &
+                    (df['班級名稱'] != cls)
+                ]
+                if not occupied.empty:
+                    ok = False
+            if target_room in SPECIAL_ROOMS:
+                occupied = df[
+                    (df['教室名稱'] == target_room) &
+                    (df['星期'] == w) &
+                    (df['節次'] == period) &
+                    (df['班級名稱'] != cls)
+                ]
+                if not occupied.empty:
+                    ok = False
+            if ok:
+                key = f"{row.iloc[0]['日期']}-{period}"
+                highlight[key] = {'type': 'current'}
+                # 注意日期需要對應 target_week
+                date_map = df[df['星期'] == target_week]['日期'].unique()
+                tdate = date_map[0] if len(date_map) else ""
+                tkey = f"{tdate}-{target_period}"
+                highlight[tkey] = {'type': 'recommended'}
+    return jsonify({'status': 'ok', 'highlight': highlight})
 
 if __name__ == "__main__":
     app.run()
