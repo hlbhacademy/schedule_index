@@ -4,6 +4,7 @@ import os
 from authlib.integrations.flask_client import OAuth
 from functools import wraps
 from dotenv import load_dotenv
+import secrets
 
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
@@ -11,13 +12,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import io
 from googleapiclient.http import MediaIoBaseDownload
 
-# === 讀取環境變數 ===
+# ===== 讀取環境變數 =====
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecretkey")
 
-# ========== Google OAuth 登入 ==========
+# ========== Google OAuth 設定 ==========
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
@@ -40,12 +41,17 @@ def login_required(f):
 
 @app.route("/login")
 def login():
-    return google.authorize_redirect(redirect_uri=url_for("callback", _external=True))
+    nonce = secrets.token_urlsafe(16)
+    session["nonce"] = nonce
+    return google.authorize_redirect(
+        redirect_uri=url_for("callback", _external=True),
+        nonce=nonce
+    )
 
 @app.route("/callback")
 def callback():
     token = google.authorize_access_token()
-    userinfo = google.parse_id_token(token)
+    userinfo = google.parse_id_token(token, nonce=session.get("nonce"))
     session["user"] = userinfo
     return redirect(url_for("index"))
 
@@ -54,10 +60,10 @@ def logout():
     session.pop("user", None)
     return redirect(url_for("login"))
 
-# ========== Google Drive 自動同步 schedule.xlsx ==========
+# ========== Google Drive schedule.xlsx 自動同步 ==========
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 SERVICE_ACCOUNT_FILE = 'service_account.json'
-FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # ←請填入 schedule.xlsx 的 Google Drive 資料夾 ID
+FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # 改為你的資料夾ID
 FILE_NAME = "schedule.xlsx"
 
 def sync_schedule():
@@ -82,14 +88,13 @@ def sync_schedule():
     except Exception as e:
         print("同步 schedule.xlsx 發生錯誤:", e)
 
-# 自動每小時同步
+# 每小時自動同步
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_schedule, 'interval', hours=1)
 scheduler.start()
-# 啟動先同步一次
 sync_schedule()
 
-# ========== 課表查詢主程式 ==========
+# ========== 課表查詢主程式區塊（以下保持與你原本一致即可） ==========
 SPECIAL_ROOMS = [
     "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
     "語言教室B", "語言教室C", "門市情境學科教室", "門市服務教室",
