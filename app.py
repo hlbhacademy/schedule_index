@@ -115,16 +115,20 @@ SPECIAL_ROOMS = [
 FORBIDDEN_SUBJECTS = ["團體活動時間", "多元選修", "彈性學習時間", "本土語文"]
 
 def class_sort_key(cls_name):
-    # 主班級（英/會/商/資/多）優先，甲乙丙丁順序正確，選修/彈性/團體活動排最後
+    # 普通班級（英會商資多開頭，甲乙丙丁，三個字）最前
     m = re.match(r'^(英|會|商|資|多)([一二三])([甲乙丙丁])$', str(cls_name))
     if m:
         prefix = {'英': 1, '會': 2, '商': 3, '資': 4, '多': 5}[m.group(1)]
         grade = {'一': 1, '二': 2, '三': 3}[m.group(2)]
         order = {'甲': 1, '乙': 2, '丙': 3, '丁': 4}[m.group(3)]
         return (0, prefix, grade, order, cls_name)
+    # 「選」字開頭的班級排普通班級後
+    if str(cls_name).startswith("選"):
+        return (1, 0, 0, 0, cls_name)
+    # 其餘彈性/選修/團體活動排最後
     if any(s in cls_name for s in ['選修', '彈性', '團體活動']):
         return (2, 0, 0, 0, cls_name)
-    return (1, 0, 0, 0, cls_name)
+    return (3, 0, 0, 0, cls_name)
 
 def room_sort_key(room):
     # 依據需求：特殊教室 > 電腦教室 > 其他
@@ -144,8 +148,9 @@ def index():
     if df is None or df.empty:
         return '<h1 style="margin:100px;text-align:center;">系統異常或查無資料，請稍後再試！</h1>'
 
+    # 排序：班級（普通班級最前、選開頭第二、其餘第三）
     class_names = sorted(df['班級名稱'].dropna().unique(), key=class_sort_key)
-    teacher_names = sorted(set(df['教師名稱'].dropna().unique()), key=lambda x: str(x))
+    teacher_names = sorted(set(df['教師名稱'].dropna().unique()), key=lambda x: str(x))  # 字典序
     room_names = sorted(df['教室名稱'].dropna().unique(), key=room_sort_key)
 
     weekday_dates = {}
