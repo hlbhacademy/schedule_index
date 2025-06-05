@@ -1,8 +1,95 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 import pandas as pd
+import os
+from authlib.integrations.flask_client import OAuth
+from functools import wraps
+from dotenv import load_dotenv
+
+from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
+from apscheduler.schedulers.background import BackgroundScheduler
+import io
+from googleapiclient.http import MediaIoBaseDownload
+
+# === 讀取環境變數 ===
+load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecretkey")
 
+# ========== Google OAuth 登入 ==========
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=os.environ["GOOGLE_CLIENT_ID"],
+    client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+    authorize_params={"hd": "hlbh.hlc.edu.tw"}
+)
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user" not in session:
+            return redirect(url_for("login"))
+        if not session["user"]["email"].endswith("@hlbh.hlc.edu.tw"):
+            return "無權限，僅限 hlbh.hlc.edu.tw 帳號", 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route("/login")
+def login():
+    return google.authorize_redirect(redirect_uri=url_for("callback", _external=True))
+
+@app.route("/callback")
+def callback():
+    token = google.authorize_access_token()
+    userinfo = google.parse_id_token(token)
+    session["user"] = userinfo
+    return redirect(url_for("index"))
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("login"))
+
+# ========== Google Drive 自動同步 schedule.xlsx ==========
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+SERVICE_ACCOUNT_FILE = 'service_account.json'
+FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # ←請填入 schedule.xlsx 的 Google Drive 資料夾 ID
+FILE_NAME = "schedule.xlsx"
+
+def sync_schedule():
+    try:
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        drive_service = build('drive', 'v3', credentials=creds)
+        query = f"'{FOLDER_ID}' in parents and name='{FILE_NAME}' and trashed=false"
+        results = drive_service.files().list(q=query, pageSize=1, fields="files(id, name)").execute()
+        items = results.get('files', [])
+        if not items:
+            print("找不到 schedule.xlsx")
+            return
+        file_id = items[0]['id']
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.FileIO("schedule.xlsx", "wb")
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        fh.close()
+        print("schedule.xlsx 已同步")
+    except Exception as e:
+        print("同步 schedule.xlsx 發生錯誤:", e)
+
+# 自動每小時同步
+scheduler = BackgroundScheduler()
+scheduler.add_job(sync_schedule, 'interval', hours=1)
+scheduler.start()
+# 啟動先同步一次
+sync_schedule()
+
+# ========== 課表查詢主程式 ==========
 SPECIAL_ROOMS = [
     "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
     "語言教室B", "語言教室C", "門市情境學科教室", "門市服務教室",
@@ -13,57 +100,26 @@ FORBIDDEN_SUBJECTS = ["團體活動時間", "多元選修", "彈性學習時間"
 
 def load_schedule():
     try:
-        df = pd.read_excel('schedule.xlsx', engine='openpyxl')
+        return pd.read_excel('schedule.xlsx', engine='openpyxl').fillna('')
     except Exception as e:
-        print("載入檔案錯誤：", e)
-        return None
-    df = df.fillna('')
-    df = df[
-        (df['教師名稱'] != '') &
-        (df['班級名稱'] != '') &
-        (df['科目名稱'] != '') &
-        (df['節次'] != '') &
-        (df['星期'] != '')
-    ].copy()
-    df['星期'] = df['星期'].astype(int)
-    df['節次'] = df['節次'].astype(int)
-    return df
+        print("課表載入失敗:", e)
+        return pd.DataFrame()
 
-def get_sorted_classes(classes):
-    pri = ["英", "會", "商", "資", "多"]
-    result = []
-    for key in pri:
-        result.extend(sorted([c for c in classes if c.startswith(key)]))
-    others = sorted([c for c in classes if c not in result])
-    return result + others
-
-def get_sorted_teachers(teachers):
-    def strokes(name):
-        ch = name[0]
-        strokes_dict = {
-            "丁": 2, "王": 4, "朱": 6, "林": 8, "洪": 9, "周": 8, "李": 7, "楊": 13, "粘": 11,
-            "許": 11, "陳": 16, "蔡": 17, "黃": 12, "張": 11, "江": 6, "莊": 10, "龔": 22,
-        }
-        return strokes_dict.get(ch, ord(ch))
-    return sorted(teachers, key=lambda n: strokes(n))
-
-def get_sorted_rooms(rooms):
-    special = [r for r in rooms if r in SPECIAL_ROOMS]
-    general = [r for r in rooms if r not in SPECIAL_ROOMS]
-    return special + sorted(general)
-
-@app.route('/')
+@app.route("/")
+@login_required
 def index():
+    user = session.get("user")
     df = load_schedule()
     if df is None or df.empty:
         return '<h1 style="margin:100px;text-align:center;">系統異常或查無資料，請稍後再試！</h1>'
-    class_names = get_sorted_classes(df['班級名稱'].unique())
-    teacher_names = get_sorted_teachers(df['教師名稱'].unique())
-    room_names = get_sorted_rooms(df['教室名稱'].unique())
+    class_names = sorted(df['班級名稱'].unique())
+    teacher_names = sorted(df['教師名稱'].unique())
+    room_names = sorted(df['教室名稱'].unique())
     weekday_dates = {}
     for i, row in df.drop_duplicates(['星期']).iterrows():
         weekday_dates[row['星期']] = row['日期']
     return render_template('index.html',
+        user=user,
         classes=class_names,
         teachers=teacher_names,
         rooms=room_names,
@@ -73,6 +129,7 @@ def index():
     )
 
 @app.route('/api/schedule', methods=['POST'])
+@login_required
 def api_schedule():
     mode = request.form.get('mode')
     value = request.form.get('value')
@@ -82,7 +139,6 @@ def api_schedule():
     weekday_dates = {}
     for i, row in df.drop_duplicates(['星期']).iterrows():
         weekday_dates[row['星期']] = row['日期']
-    # 這裡做重點修正！根據查詢模式過濾
     if mode == '班級':
         sub_df = df[df['班級名稱'] == value]
     elif mode == '教師':
@@ -107,6 +163,7 @@ def api_schedule():
     return jsonify({'status': 'ok', 'html': html})
 
 @app.route('/api/swap_info', methods=['POST'])
+@login_required
 def api_swap_info():
     df = load_schedule()
     if df is None or df.empty:
@@ -162,5 +219,5 @@ def api_swap_info():
                 highlight[tkey] = {'type': 'recommended'}
     return jsonify({'status': 'ok', 'highlight': highlight})
 
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    app.run()
