@@ -6,6 +6,11 @@ from functools import wraps
 from dotenv import load_dotenv
 import secrets
 
+import os
+if not os.path.exists("service_account.json") and os.environ.get("GOOGLE_CREDENTIAL_JSON"):
+    with open("service_account.json", "w") as f:
+        f.write(os.environ["GOOGLE_CREDENTIAL_JSON"])
+
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from apscheduler.schedulers.background import BackgroundScheduler
