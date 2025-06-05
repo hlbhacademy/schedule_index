@@ -153,6 +153,9 @@ def index():
     teacher_names = sorted(set(df['教師名稱'].dropna().unique()), key=lambda x: str(x))  # 字典序
     room_names = sorted(df['教室名稱'].dropna().unique(), key=room_sort_key)
 
+    # Debug 印出教師清單
+    print("教師清單：", teacher_names)
+
     weekday_dates = {}
     for i, row in df.drop_duplicates(['星期']).iterrows():
         weekday_dates[row['星期']] = row['日期']
