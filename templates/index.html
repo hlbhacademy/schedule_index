@@ -92,19 +92,15 @@
         let week = {{ week if week else 1 }};
 
         // ====== 排序規則 ======
-        // 1. 班級排序：普通班級（英會商資多+甲乙丙丁）> 選開頭 > 其餘
         function classSortKey(cls) {
-            // 普通班級（3字，英/會/商/資/多開頭，二三甲乙丙丁）
-            let m = cls.match(/^(英|會|商|資|多)(一|二|三)(甲|乙|丙|丁)$/);
+            let m = cls && cls.match(/^(英|會|商|資|多)(一|二|三)(甲|乙|丙|丁)$/);
             if (m) {
                 const prefixOrder = { '英': 1, '會': 2, '商': 3, '資': 4, '多': 5 };
                 const gradeOrder = { '一': 1, '二': 2, '三': 3 };
                 const classOrder = { '甲': 1, '乙': 2, '丙': 3, '丁': 4 };
                 return [0, prefixOrder[m[1]], gradeOrder[m[2]], classOrder[m[3]], cls];
             }
-            // 選開頭的放中間
-            if (cls.startsWith('選')) return [1, 0, 0, 0, cls];
-            // 其餘（含彈性、團體活動等）排最後
+            if (cls && cls.startsWith('選')) return [1, 0, 0, 0, cls];
             return [2, 0, 0, 0, cls];
         }
         function sortClasses(classList) {
@@ -113,27 +109,29 @@
                 for (let i = 0; i < ka.length; i++) {
                     if (ka[i] !== kb[i]) return ka[i] - kb[i];
                 }
-                return a.localeCompare(b, 'zh-Hant');
+                return (a || '').localeCompare(b || '', 'zh-Hant');
             });
         }
-        // 2. 教師排序：第一字筆畫
+        // 教師排序（保留筆畫、字典序邏輯，並過濾空值）
         function sortTeachers(teacherList) {
             function getStrokes(ch) {
-                // 常見姓氏筆畫數
+                if (!ch) return 999;
                 const strokes = {
                     '王': 4, '李': 7, '張': 11, '陳': 16, '林': 8, '謝': 17, '郭': 15,
                     '黃': 12, '吳': 7, '徐': 10, '周': 8, '鄭': 19, '何': 7, '羅': 20,
                     '高': 10, '許': 11, '賴': 15, '宋': 7, '沈': 7
                 };
-                return strokes[ch] || ch.charCodeAt(0);
+                return strokes[ch] || ch.charCodeAt?.(0) || 999;
             }
-            return teacherList.slice().sort((a, b) => {
-                const sa = getStrokes(a[0]);
-                const sb = getStrokes(b[0]);
-                return sa - sb || a.localeCompare(b, 'zh-Hant');
-            });
+            // 新增：排除空字串與null
+            return teacherList.filter(x => typeof x === "string" && x.trim() !== "")
+                .slice().sort((a, b) => {
+                    const sa = getStrokes(a[0]);
+                    const sb = getStrokes(b[0]);
+                    return sa - sb || a.localeCompare(b, 'zh-Hant');
+                });
         }
-        // 3. 教室排序：特殊、電腦教室在前，班級教室再其他
+        // 教室排序（保留原排序邏輯）
         function sortRooms(roomList) {
             const special = [
                 "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
@@ -144,9 +142,8 @@
                 "電腦教室401", "電腦教室402", "電腦教室403"
             ];
             let others = roomList.filter(r => !special.includes(r) && !computers.includes(r));
-            // 普通班級教室（依照班級排序）
-            let clsRooms = others.filter(r => r.match(/^(英|會|商|資|多)(一|二|三)(甲|乙|丙|丁)教室$/));
-            let nonClsRooms = others.filter(r => !r.match(/^(英|會|商|資|多)(一|二|三)(甲|乙|丙|丁)教室$/));
+            let clsRooms = others.filter(r => typeof r === "string" && r.match(/^(英|會|商|資|多)(一|二|三)(甲|乙|丙|丁)教室$/));
+            let nonClsRooms = others.filter(r => !(typeof r === "string" && r.match(/^(英|會|商|資|多)(一|二|三)(甲|乙|丙|丁)教室$/)));
             clsRooms = sortClasses(clsRooms);
             return [
                 ...special.filter(r => roomList.includes(r)),
