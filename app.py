@@ -209,4 +209,4 @@ def api_swap_info():
         if target_subject in FORBIDDEN_SUBJECTS:
             continue
         ta = df[(df['教師名稱'] == teacher) & (df['星期'] == target_week) & (df['節次'] == target_period)]
-        tb = df[(df['教師名稱'] == target_teacher) & (df['星期'] == w) & (df_]()
+        tb = df[(df['教師名稱'] == target_teacher) & (df['星期'] == w) & (df['節次'] == period)]
