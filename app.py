@@ -119,6 +119,8 @@ SPECIAL_ROOMS = [
 ]
 FORBIDDEN_SUBJECTS = ["團體活動時間", "多元選修", "彈性學習時間", "本土語文"]
 
+import re
+
 @app.route("/")
 @login_required
 def index():
@@ -127,9 +129,26 @@ def index():
     df = load_schedule(week)
     if df is None or df.empty:
         return '<h1 style="margin:100px;text-align:center;">系統異常或查無資料，請稍後再試！</h1>'
-    class_names = sorted(df['班級名稱'].unique())
-    teacher_names = sorted(df['教師名稱'].unique())
-    room_names = sorted(df['教室名稱'].unique())
+
+    # ==== 主班級優先，其餘排最後 ====
+    def class_sort_key(cls_name):
+        # 主班級優先（英/會/商/資/多開頭，依年級、班級排序）
+        m = re.match(r'^(英|會|商|資|多)[一二三][甲乙丙丁]$', str(cls_name))
+        if m:
+            prefix = {'英': 1, '會': 2, '商': 3, '資': 4, '多': 5}[m.group(1)]
+            grade = {'一': 1, '二': 2, '三': 3}[cls_name[1]]
+            order = {'甲': 1, '乙': 2, '丙': 3, '丁': 4}[cls_name[2]]
+            return (0, prefix, grade, order, cls_name)
+        # 其他（有彈性/選修/團體活動關鍵字的排最後）
+        if any(s in cls_name for s in ['選修', '彈性', '團體活動']):
+            return (2, 0, 0, 0, cls_name)
+        # 其餘排中間
+        return (1, 0, 0, 0, cls_name)
+
+    class_names = sorted(df['班級名稱'].unique(), key=class_sort_key)
+    teacher_names = sorted(df['教師名稱'].dropna().unique())  # 不排序筆畫，只排序字典序
+    room_names = sorted(df['教室名稱'].dropna().unique())     # 你有需要再加房間排序即可
+
     weekday_dates = {}
     for i, row in df.drop_duplicates(['星期']).iterrows():
         weekday_dates[row['星期']] = row['日期']
