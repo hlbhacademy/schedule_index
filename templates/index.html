@@ -57,12 +57,23 @@
             color: #888;
             font-size: 1em;
         }
+        .week-select-label {
+            margin-right: 10px;
+            font-size: 1.1em;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>花蓮高商課表查詢系統</h1>
         <div class="mode-group">
+            <label class="week-select-label">週次：
+                <select id="week-select">
+                    {% for w in range(1, 22) %}
+                    <option value="{{w}}" {% if week==w %}selected{% endif %}>第{{w}}週</option>
+                    {% endfor %}
+                </select>
+            </label>
             <label><input type="radio" name="mode" value="教師"> 依教師</label>
             <label><input type="radio" name="mode" value="班級" checked> 依班級</label>
             <label><input type="radio" name="mode" value="教室"> 依教室</label>
@@ -78,14 +89,66 @@
         const rooms = {{ rooms|tojson }};
         let mode = "{{ default_mode }}";
         let defaultClass = "{{ default_class }}";
+        let week = {{ week if week else 1 }};
+
+        // ====== 排序規則 ======
+
+        // 1. 班級排序：英會商資多一二三年級
+        function sortClasses(classList) {
+            const groupOrder = ['英', '會', '商', '資', '多'];
+            return classList.slice().sort((a, b) => {
+                let ra = /^(\D+)(\d)/.exec(a), rb = /^(\D+)(\d)/.exec(b);
+                let ia = ra ? groupOrder.indexOf(ra[1]) : 99;
+                let ib = rb ? groupOrder.indexOf(rb[1]) : 99;
+                if (ia !== ib) return ia - ib;
+                return (ra && rb ? parseInt(ra[2]) - parseInt(rb[2]) : 0) || a.localeCompare(b, 'zh-Hant');
+            });
+        }
+        // 2. 教師排序：第一字筆畫多寡
+        function sortTeachers(teacherList) {
+            function getStrokes(ch) {
+                // 只寫常見姓氏筆畫，如需補充可自行加全
+                const strokes = {
+                    '王': 4, '李': 7, '張': 11, '陳': 16, '林': 8, '謝': 17, '郭': 15,
+                    '黃': 12, '吳': 7, '徐': 10, '周': 8, '鄭': 19, '何': 7, '羅': 20,
+                    '高': 10, '許': 11, '賴': 15, '宋': 7, '沈': 7
+                };
+                return strokes[ch] || ch.charCodeAt(0); // 不詳則用字碼
+            }
+            return teacherList.slice().sort((a, b) => {
+                const sa = getStrokes(a[0]);
+                const sb = getStrokes(b[0]);
+                return sa - sb || a.localeCompare(b, 'zh-Hant');
+            });
+        }
+        // 3. 教室排序：特殊、電腦教室在前，班級教室在後
+        function sortRooms(roomList) {
+            const special = [
+                "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
+                "語言教室B", "語言教室C", "門市情境學科教室", "門市服務教室"
+            ];
+            const computers = [
+                "電腦教室202", "電腦教室203", "電腦教室301", "電腦教室302", "電腦教室303",
+                "電腦教室401", "電腦教室402", "電腦教室403"
+            ];
+            let others = roomList.filter(r => !special.includes(r) && !computers.includes(r));
+            others = sortClasses(others);
+            return [
+                ...special.filter(r => roomList.includes(r)),
+                ...computers.filter(r => roomList.includes(r)),
+                ...others
+            ];
+        }
+
+        // ==========
 
         function fillOptions() {
             const select = document.getElementById('option-select');
             select.innerHTML = "";
             let arr = [];
-            if (mode === '教師') arr = teachers;
-            else if (mode === '班級') arr = classes;
-            else arr = rooms;
+            if (mode === '教師') arr = sortTeachers(teachers);
+            else if (mode === '班級') arr = sortClasses(classes);
+            else arr = sortRooms(rooms);
             for (const v of arr) {
                 const opt = document.createElement('option');
                 opt.value = v;
@@ -104,7 +167,7 @@
             fetch('/api/schedule', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: `mode=${encodeURIComponent(mode)}&value=${encodeURIComponent(value)}`
+                body: `mode=${encodeURIComponent(mode)}&value=${encodeURIComponent(value)}&week=${encodeURIComponent(week)}`
             })
             .then(r => r.json())
             .then(res => {
@@ -131,7 +194,7 @@
                     fetch('/api/swap_info', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                        body: `cls=${encodeURIComponent(cls)}&date=${encodeURIComponent(date)}&period=${encodeURIComponent(period)}&teacher=${encodeURIComponent(teacher)}`
+                        body: `cls=${encodeURIComponent(cls)}&date=${encodeURIComponent(date)}&period=${encodeURIComponent(period)}&teacher=${encodeURIComponent(teacher)}&week=${encodeURIComponent(week)}`
                     })
                     .then(r => r.json())
                     .then(res => {
@@ -162,6 +225,10 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('week-select').addEventListener('change', function() {
+                week = parseInt(this.value, 10);
+                fetchSchedule();
+            });
             document.querySelectorAll('input[name="mode"]').forEach(radio => {
                 radio.addEventListener('change', e => {
                     mode = e.target.value;

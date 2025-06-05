@@ -6,7 +6,7 @@ from functools import wraps
 from dotenv import load_dotenv
 import secrets
 
-import os
+# ==== 產生金鑰檔案 ====
 if not os.path.exists("service_account.json") and os.environ.get("GOOGLE_CREDENTIAL_JSON"):
     with open("service_account.json", "w") as f:
         f.write(os.environ["GOOGLE_CREDENTIAL_JSON"])
@@ -65,46 +65,52 @@ def logout():
     session.pop("user", None)
     return redirect(url_for("login"))
 
-# ========== Google Drive schedule.xlsx 自動同步 ==========
+# ========== Google Drive 課表自動同步 ==========
+
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 SERVICE_ACCOUNT_FILE = 'service_account.json'
-FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # <== 改為你的 Google Drive 資料夾ID
-FILE_NAME = "schedule.xlsx"
+FOLDER_ID = "11BU1pxjEWMQJp8vThcC7thp4Mog0YEaJ"  # <== 請填你的資料夾 ID
 
-def sync_schedule():
+def sync_schedule(week):
+    # 支援多週檔名 schedule_01.xlsx、schedule_02.xlsx...
+    file_name = f"schedule_{int(week):02d}.xlsx"
+    local_file = file_name
+    # 若本地有檔案且大小合理，則不重抓
+    if os.path.exists(local_file) and os.path.getsize(local_file) > 1000:
+        return local_file
+    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    drive_service = build('drive', 'v3', credentials=creds)
+    query = f"'{FOLDER_ID}' in parents and name='{file_name}' and trashed=false"
+    results = drive_service.files().list(q=query, pageSize=1, fields="files(id, name)").execute()
+    items = results.get('files', [])
+    if not items:
+        print(f"找不到 {file_name}")
+        return None
+    file_id = items[0]['id']
+    request = drive_service.files().get_media(fileId=file_id)
+    fh = io.FileIO(local_file, "wb")
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    fh.close()
+    print(f"{file_name} 已同步")
+    return local_file
+
+def load_schedule(week):
     try:
-        # Debug: 印出金鑰檔案資訊
-        print('service_account.json exists:', os.path.exists('service_account.json'))
-        print('service_account.json size:', os.path.getsize('service_account.json') if os.path.exists('service_account.json') else 0)
-        print('Current directory files:', os.listdir('.'))
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        drive_service = build('drive', 'v3', credentials=creds)
-        query = f"'{FOLDER_ID}' in parents and name='{FILE_NAME}' and trashed=false"
-        results = drive_service.files().list(q=query, pageSize=1, fields="files(id, name)").execute()
-        items = results.get('files', [])
-        print("Google Drive 查詢 schedule.xlsx 結果:", items)
-        if not items:
-            print("找不到 schedule.xlsx")
-            return
-        file_id = items[0]['id']
-        request = drive_service.files().get_media(fileId=file_id)
-        fh = io.FileIO("schedule.xlsx", "wb")
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-        fh.close()
-        print("schedule.xlsx 已同步")
+        file_path = sync_schedule(week)
+        if file_path and os.path.exists(file_path):
+            return pd.read_excel(file_path, engine='openpyxl').fillna('')
+        else:
+            print("課表載入失敗：無法取得 schedule")
+            return pd.DataFrame()
     except Exception as e:
-        print("同步 schedule.xlsx 發生錯誤:", e)
+        print("課表載入失敗:", e)
+        return pd.DataFrame()
 
-# 每小時自動同步一次，也在啟動時同步
-scheduler = BackgroundScheduler()
-scheduler.add_job(sync_schedule, 'interval', hours=1)
-scheduler.start()
-sync_schedule()
+# ========== 你的調課、查詢主程式區塊 ==========
 
-# ========== 課表查詢主程式區塊 ==========
 SPECIAL_ROOMS = [
     "健康與護理教室", "分組活動教室", "原住民資源教室", "美術教室", "自然科學教室", "行銷生涯教室",
     "語言教室B", "語言教室C", "門市情境學科教室", "門市服務教室",
@@ -113,18 +119,12 @@ SPECIAL_ROOMS = [
 ]
 FORBIDDEN_SUBJECTS = ["團體活動時間", "多元選修", "彈性學習時間", "本土語文"]
 
-def load_schedule():
-    try:
-        return pd.read_excel('schedule.xlsx', engine='openpyxl').fillna('')
-    except Exception as e:
-        print("課表載入失敗:", e)
-        return pd.DataFrame()
-
 @app.route("/")
 @login_required
 def index():
     user = session.get("user")
-    df = load_schedule()
+    week = int(request.args.get("week", 1))  # 支援 URL ?week=xx
+    df = load_schedule(week)
     if df is None or df.empty:
         return '<h1 style="margin:100px;text-align:center;">系統異常或查無資料，請稍後再試！</h1>'
     class_names = sorted(df['班級名稱'].unique())
@@ -140,15 +140,17 @@ def index():
         rooms=room_names,
         default_mode='班級',
         default_class=class_names[0] if class_names else '',
-        weekday_dates=weekday_dates
+        weekday_dates=weekday_dates,
+        week=week
     )
 
 @app.route('/api/schedule', methods=['POST'])
 @login_required
 def api_schedule():
+    week = int(request.form.get('week', 1))
     mode = request.form.get('mode')
     value = request.form.get('value')
-    df = load_schedule()
+    df = load_schedule(week)
     if df is None or df.empty:
         return jsonify({'status': 'error', 'html': ''})
     weekday_dates = {}
@@ -180,7 +182,8 @@ def api_schedule():
 @app.route('/api/swap_info', methods=['POST'])
 @login_required
 def api_swap_info():
-    df = load_schedule()
+    week = int(request.form.get('week', 1))
+    df = load_schedule(week)
     if df is None or df.empty:
         return jsonify({'status': 'error', 'highlight': {}})
     cls = request.form.get('cls')
@@ -206,33 +209,4 @@ def api_swap_info():
         if target_subject in FORBIDDEN_SUBJECTS:
             continue
         ta = df[(df['教師名稱'] == teacher) & (df['星期'] == target_week) & (df['節次'] == target_period)]
-        tb = df[(df['教師名稱'] == target_teacher) & (df['星期'] == w) & (df['節次'] == period)]
-        if (ta.empty and tb.empty):
-            ok = True
-            if room in SPECIAL_ROOMS:
-                occupied = df[
-                    (df['教室名稱'] == room) &
-                    (df['星期'] == target_week) &
-                    (df['節次'] == target_period) &
-                    (df['班級名稱'] != cls)
-                ]
-                if not occupied.empty:
-                    ok = False
-            if target_room in SPECIAL_ROOMS:
-                occupied = df[
-                    (df['教室名稱'] == target_room) &
-                    (df['星期'] == w) &
-                    (df['節次'] == period) &
-                    (df['班級名稱'] != cls)
-                ]
-                if not occupied.empty:
-                    ok = False
-            if ok:
-                key = f"{row.iloc[0]['日期']}-{period}"
-                highlight[key] = {'type': 'current'}
-                tkey = f"{df[df['星期'] == target_week].iloc[0]['日期']}-{target_period}"
-                highlight[tkey] = {'type': 'recommended'}
-    return jsonify({'status': 'ok', 'highlight': highlight})
-
-if __name__ == "__main__":
-    app.run()
+        tb = df[(df['教師名稱'] == target_teacher) & (df['星期'] == w) & (df_]()
