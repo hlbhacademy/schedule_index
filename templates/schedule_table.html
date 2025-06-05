@@ -1,0 +1,50 @@
+<table border=1 class="schedule-table">
+  <tr>
+    <th>節次/日期</th>
+    {% for wd in range(1,6) %}
+    <th>
+      {{ wd }}
+      {% if weekday_dates and weekday_dates[wd] %}
+        <br>{{ weekday_dates[wd] }}
+      {% endif %}
+    </th>
+    {% endfor %}
+  </tr>
+  {% for period in range(1,9) %}
+  <tr>
+    <td>第{{ period }}節</td>
+    {% for wd in range(1,6) %}
+    <td style="vertical-align:top;">
+      {% set cell = [] %}
+      {% for item in table_data %}
+        {% if item['weekday']==wd and item['period']==period %}
+          {% if mode == '班級' %}
+            <div class="lesson-cell has-lesson"
+                 data-cls="{{ item['班級名稱'] }}"
+                 data-date="{{ weekday_dates[wd] }}"
+                 data-period="{{ period }}"
+                 data-teacher="{{ item['教師名稱'] }}">
+              <strong>{{ item['科目名稱'] }}</strong>
+              <br>{{ item['教師名稱'] }}
+              <br>{{ item['教室名稱'] }}
+            </div>
+          {% elif mode == '教師' %}
+            <div class="lesson-cell has-lesson">
+              <strong>{{ item['班級名稱'] }}</strong>
+              <br>{{ item['科目名稱'] }}
+              <br>{{ item['教室名稱'] }}
+            </div>
+          {% elif mode == '教室' %}
+            <div class="lesson-cell has-lesson">
+              <strong>{{ item['科目名稱'] }}</strong>
+              <br>{{ item['班級名稱'] }}
+              <br>{{ item['教師名稱'] }}
+            </div>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    </td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>

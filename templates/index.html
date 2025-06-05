@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>花蓮高商課表查詢系統</title>
+    <style>
+        body { background: #f5f6fa; font-family: 'Segoe UI', '微軟正黑體', Arial, sans-serif; }
+        .container {
+            margin: 40px auto; padding: 30px 30px 40px 30px;
+            background: #fff; border-radius: 24px;
+            box-shadow: 0 8px 32px 0 rgba(60,70,100,0.10);
+            width: 90%; max-width: 1100px;
+        }
+        h1 { font-size: 2.4rem; font-weight: 900; margin-bottom: 22px; letter-spacing: 2px;}
+        .mode-group { margin-bottom: 24px; }
+        .mode-group label { margin-right: 24px; font-size: 1.1em; }
+        select { padding: 6px 16px; border-radius: 6px; font-size: 1.1em; margin-left: 8px; }
+        .error-msg { color: #d22; margin: 10px 0 0 0; }
+        .lesson-cell {
+            min-height: 48px; border-radius: 6px;
+            border: 2px solid #eee; background: #fff;
+            transition: box-shadow .1s, background .1s;
+            margin: 1px 0;
+            cursor: pointer; font-size: 1em;
+        }
+        .lesson-cell.has-lesson {
+            border: 2px solid #90c4ff;
+            background: #fff;
+        }
+        .lesson-cell.has-lesson:hover {
+            background: #eaf6ff;
+        }
+        .lesson-cell.selected {
+            outline: 2px solid #888; background: #e0e0e0 !important;
+        }
+        .lesson-cell.recommended {
+            border: 2px solid #369cff !important;
+            background: #e5f3ff !important;
+            z-index: 2;
+        }
+        .lesson-cell.disabled {
+            background: #fff; border: 2px solid #eee; cursor: default;
+        }
+        @media (max-width: 600px) {
+            .container { padding: 10px; max-width: 99vw; }
+            h1 { font-size: 1.5rem; }
+        }
+        .schedule-table { width: 100%; border-collapse: collapse; }
+        .schedule-table th, .schedule-table td { border: 1px solid #ccc; padding: 8px; text-align: center; vertical-align: top; }
+        .schedule-table th { background: #f5f5f5; }
+        .schedule-table tbody tr:nth-child(even) { background-color: #f7faff; }
+        .schedule-table tbody tr:nth-child(odd) { background-color: #fff; }
+        .footer-tip {
+            margin-top: 30px;
+            text-align: right;
+            color: #888;
+            font-size: 1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>花蓮高商課表查詢系統</h1>
+        <div class="mode-group">
+            <label><input type="radio" name="mode" value="教師"> 依教師</label>
+            <label><input type="radio" name="mode" value="班級" checked> 依班級</label>
+            <label><input type="radio" name="mode" value="教室"> 依教室</label>
+            <select id="option-select"></select>
+        </div>
+        <div id="error" class="error-msg" style="display:none"></div>
+        <div id="schedule-table"></div>
+        <div class="footer-tip" id="footer-tip"></div>
+    </div>
+    <script>
+        const teachers = {{ teachers|tojson }};
+        const classes = {{ classes|tojson }};
+        const rooms = {{ rooms|tojson }};
+        let mode = "{{ default_mode }}";
+        let defaultClass = "{{ default_class }}";
+
+        function fillOptions() {
+            const select = document.getElementById('option-select');
+            select.innerHTML = "";
+            let arr = [];
+            if (mode === '教師') arr = teachers;
+            else if (mode === '班級') arr = classes;
+            else arr = rooms;
+            for (const v of arr) {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                select.appendChild(opt);
+            }
+            if (mode === '班級' && defaultClass && arr.includes(defaultClass)) {
+                select.value = defaultClass;
+            }
+        }
+
+        function fetchSchedule() {
+            const select = document.getElementById('option-select');
+            const value = select.value;
+            document.getElementById('error').style.display = 'none';
+            fetch('/api/schedule', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `mode=${encodeURIComponent(mode)}&value=${encodeURIComponent(value)}`
+            })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status === 'ok') {
+                    document.getElementById('schedule-table').innerHTML = res.html;
+                    if (mode === '班級') attachCellClick();
+                } else {
+                    document.getElementById('schedule-table').innerHTML = '';
+                    document.getElementById('error').textContent = "系統錯誤，請稍後再試";
+                    document.getElementById('error').style.display = '';
+                }
+            });
+        }
+
+        function attachCellClick() {
+            document.querySelectorAll('.lesson-cell.has-lesson').forEach(cell => {
+                cell.onclick = function () {
+                    document.querySelectorAll('.lesson-cell').forEach(c => c.classList.remove('selected', 'recommended'));
+                    cell.classList.add('selected');
+                    const cls = cell.getAttribute('data-cls');
+                    const date = cell.getAttribute('data-date');
+                    const period = cell.getAttribute('data-period');
+                    const teacher = cell.getAttribute('data-teacher');
+                    fetch('/api/swap_info', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: `cls=${encodeURIComponent(cls)}&date=${encodeURIComponent(date)}&period=${encodeURIComponent(period)}&teacher=${encodeURIComponent(teacher)}`
+                    })
+                    .then(r => r.json())
+                    .then(res => {
+                        if (res.status === 'ok') {
+                            for (const key in res.highlight) {
+                                const [d, p] = key.split('-');
+                                const tcell = document.querySelector(`.lesson-cell[data-cls="${cls}"][data-date="${d}"][data-period="${p}"]`);
+                                if (!tcell) continue;
+                                tcell.classList.remove('recommended', 'selected');
+                                if (res.highlight[key].type === 'current') tcell.classList.add('selected');
+                                else if (res.highlight[key].type === 'recommended') tcell.classList.add('recommended');
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        // Footer update info
+        function updateFooterTip() {
+            const d = new Date();
+            d.setDate(d.getDate() - 1);
+            const year = d.getFullYear() - 1911;
+            const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+            const dd = d.getDate().toString().padStart(2, '0');
+            document.getElementById('footer-tip').innerHTML =
+                `資料更新於${year}.${mm}.${dd} 16時，僅提供一周內實際課表查詢，如有異動仍以教學組發布訊息為準`;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('input[name="mode"]').forEach(radio => {
+                radio.addEventListener('change', e => {
+                    mode = e.target.value;
+                    fillOptions();
+                    fetchSchedule();
+                });
+            });
+            document.getElementById('option-select').addEventListener('change', fetchSchedule);
+            fillOptions();
+            fetchSchedule();
+            updateFooterTip();
+        });
+    </script>
+</body>
+</html>
